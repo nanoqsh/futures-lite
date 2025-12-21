@@ -1908,19 +1908,24 @@ fn read_line_internal<R: AsyncBufRead + ?Sized>(
 ) -> Poll<Result<usize>> {
     let ret = ready!(read_until_internal(reader, cx, b'\n', bytes, read));
 
-    match String::from_utf8(mem::take(bytes)) {
-        Ok(s) => {
-            debug_assert!(buf.is_empty());
-            debug_assert_eq!(*read, 0);
-            *buf = s;
-            Poll::Ready(ret)
-        }
-        Err(_) => Poll::Ready(ret.and_then(|_| {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                "stream did not contain valid UTF-8",
-            ))
-        })),
+    let utf8_err = || Error::new(ErrorKind::InvalidData, "stream did not contain valid UTF-8");
+
+    if buf.is_empty() {
+        let Ok(s) = String::from_utf8(mem::take(bytes)) else {
+            return Poll::Ready(ret.and_then(|_| Err(utf8_err())));
+        };
+        debug_assert_eq!(*read, 0);
+        *buf = s;
+        Poll::Ready(ret)
+    } else {
+        let Ok(s) = core::str::from_utf8(bytes) else {
+            bytes.clear();
+            return Poll::Ready(ret.and_then(|_| Err(utf8_err())));
+        };
+        debug_assert_eq!(*read, 0);
+        buf.push_str(s);
+        bytes.clear();
+        Poll::Ready(ret)
     }
 }
 
@@ -3099,4 +3104,19 @@ use memchr::memchr;
 #[cfg(not(feature = "memchr"))]
 fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
     haystack.iter().position(|&b| b == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AsyncBufReadExt;
+
+    #[test]
+    fn non_empty_buffer() {
+        spin_on::spin_on(async {
+            let mut bytes = "foo".as_bytes();
+            let mut buf = std::string::String::from("bar");
+            bytes.read_line(&mut buf).await.unwrap();
+            assert_eq!(&buf, "barfoo");
+        });
+    }
 }
