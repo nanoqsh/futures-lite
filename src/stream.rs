@@ -1585,6 +1585,16 @@ pub trait StreamExt: Stream {
         Enumerate { stream: self, i: 0 }
     }
 
+    fn peekable(self) -> Peekable<Self>
+    where
+        Self: Sized,
+    {
+        Peekable {
+            stream: self,
+            peeked: None,
+        }
+    }
+
     /// Calls a closure on each item and passes it on.
     ///
     /// # Examples
@@ -3107,6 +3117,148 @@ where
             }
             None => Poll::Ready(None),
         }
+    }
+}
+
+pin_project! {
+    /// Stream for the [`StreamExt::peekable()`] method.
+    #[derive(Clone, Debug)]
+    #[must_use = "streams do nothing unless polled"]
+    pub struct Peekable<S>
+    where
+        S: Stream,
+    {
+        #[pin]
+        stream: S,
+        peeked: Option<Option<S::Item>>,
+    }
+}
+
+impl<S> Peekable<S>
+where
+    S: Stream,
+{
+    pub fn peek(&mut self) -> Peek<'_, S>
+    where
+        Self: Unpin,
+    {
+        Peek {
+            state: Some(Pin::new(self)),
+        }
+    }
+
+    pub fn peek_mut(&mut self) -> PeekMut<'_, S>
+    where
+        Self: Unpin,
+    {
+        PeekMut {
+            state: Some(Pin::new(self)),
+        }
+    }
+
+    pub fn poll_peek_mut(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<&mut S::Item>> {
+        let mut this = self.project();
+
+        match this.peeked {
+            Some(v) => Poll::Ready(v.as_mut()),
+            None => {
+                let peeked = ready!(this.stream.as_mut().poll_next(cx));
+                Poll::Ready(this.peeked.insert(peeked).as_mut())
+            }
+        }
+    }
+}
+
+impl<S> Stream for Peekable<S>
+where
+    S: Stream,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        match this.peeked.take() {
+            Some(v) => Poll::Ready(v),
+            None => this.stream.poll_next(cx),
+        }
+    }
+}
+
+/// Future for the [`Peekable::peek()`] method.
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct Peek<'peek, S>
+where
+    S: Stream,
+{
+    state: Option<Pin<&'peek mut Peekable<S>>>,
+}
+
+impl<S> fmt::Debug for Peek<'_, S>
+where
+    S: Stream + fmt::Debug,
+    S::Item: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Peek").field("state", &self.state).finish()
+    }
+}
+
+impl<'peek, S> Future for Peek<'peek, S>
+where
+    S: Stream,
+{
+    type Output = Option<&'peek S::Item>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        poll_peek_mut(&mut self.get_mut().state, cx).map(|peeked| peeked.map(|v| &*v))
+    }
+}
+
+/// Future for the [`Peekable::peek_mut()`] method.
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct PeekMut<'peek, S>
+where
+    S: Stream,
+{
+    state: Option<Pin<&'peek mut Peekable<S>>>,
+}
+
+impl<S> fmt::Debug for PeekMut<'_, S>
+where
+    S: Stream + fmt::Debug,
+    S::Item: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeekMut")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+impl<'peek, S> Future for PeekMut<'peek, S>
+where
+    S: Stream,
+{
+    type Output = Option<&'peek mut S::Item>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        poll_peek_mut(&mut self.get_mut().state, cx)
+    }
+}
+
+fn poll_peek_mut<'peek, S>(
+    state: &mut Option<Pin<&'peek mut Peekable<S>>>,
+    cx: &mut Context<'_>,
+) -> Poll<Option<&'peek mut S::Item>>
+where
+    S: Stream,
+{
+    match state {
+        Some(peekable) => {
+            ready!(peekable.as_mut().poll_peek_mut(cx));
+            state.take().unwrap().poll_peek_mut(cx)
+        }
+        None => panic!("polled after completion"),
     }
 }
 
