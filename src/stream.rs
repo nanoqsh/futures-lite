@@ -3225,7 +3225,7 @@ impl<S: Stream> Peekable<S> {
 
     /// The poll-based implementation of [`peek`](Peekable::peek)
     /// and [`peek_mut`](Peekable::peek_mut).
-    pub fn poll_peek_mut(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<&mut S::Item>> {
+    fn poll_peek_mut(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<&mut S::Item>> {
         let mut this = self.project();
 
         match this.peeked {
