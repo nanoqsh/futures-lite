@@ -3261,7 +3261,7 @@ where
     S::Item: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Peek").field("state", &self.state).finish()
+        f.debug_struct("Peek").finish_non_exhaustive()
     }
 }
 
@@ -3284,9 +3284,7 @@ where
     S::Item: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PeekMut")
-            .field("state", &self.state)
-            .finish()
+        f.debug_struct("PeekMut").finish_non_exhaustive()
     }
 }
 
